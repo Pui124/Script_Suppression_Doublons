@@ -42,6 +42,9 @@ Thumbs.db
 *.txt
 rapport_*.txt
 
+# Exceptions : fichiers .txt à versionner malgré la règle *.txt ci-dessus
+!requirements.txt
+
 # Fichiers de rapports (générés)
 Rapport_*.txt
 
