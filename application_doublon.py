@@ -154,31 +154,32 @@ class FileIndex:
             print(f"Erreur indexation: {e}")
             self.indexed = False
 
-    def trouver_candidats(self, nom, chemin_csv):
-        """Renvoie la liste ordonnée des chemins réels candidats (existants).
+    def resoudre_chemin_exact(self, chemin_csv):
+        """Résout le chemin CSV vers un chemin réel par correspondance EXACTE
+        du chemin relatif. Renvoie None si aucune correspondance fiable.
 
-        Priorité au chemin relatif exact, puis repli sur le nom de fichier.
-        L'appelant doit vérifier le MD5 et exclure l'original avant suppression.
-        """
-        candidats = []
+        Ne fait jamais de repli par nom : sert à identifier précisément un
+        fichier (notamment l'original, qu'il ne faut surtout pas confondre
+        avec un homonyme situé ailleurs)."""
         chemin_csv = (chemin_csv or '').strip()
-
-        cles = [
+        cles = (
             chemin_csv,
             chemin_csv.lstrip('\\').lstrip('/'),
             chemin_csv.replace('/', os.sep).replace('\\', os.sep),
-        ]
+        )
         for cle in cles:
             if cle and cle in self.chemin_csv_to_real:
-                candidats.append(self.chemin_csv_to_real[cle])
+                p = self.chemin_csv_to_real[cle]
+                if os.path.isfile(p):
+                    return p
+        return None
 
-        # Repli : tous les fichiers portant ce nom
-        candidats.extend(self.nom_to_path.get(nom, []))
-
-        # Dédupliquer en conservant l'ordre et ne garder que les fichiers existants
-        seen = set()
+    def candidats_par_nom(self, nom):
+        """Renvoie tous les fichiers existants portant ce nom (repli de dernier
+        recours, à n'utiliser qu'avec une vérification de contenu)."""
         result = []
-        for p in candidats:
+        seen = set()
+        for p in self.nom_to_path.get(nom, []):
             key = os.path.normcase(os.path.abspath(p))
             if key not in seen and os.path.isfile(p):
                 seen.add(key)
@@ -668,12 +669,16 @@ class ApplicationDoublons:
         self.btn_annuler.config(state=tk.NORMAL if running else tk.DISABLED)
 
     def _resoudre_originaux(self, original):
-        """Renvoie l'ensemble des chemins réels (normalisés) de l'original,
-        pour ne jamais les supprimer."""
-        chemins = self.file_index.trouver_candidats(
-            original.get('nom', '?'), original.get('chemin', '')
-        )
-        return {os.path.normcase(os.path.abspath(p)) for p in chemins}
+        """Renvoie le chemin réel (normalisé) de l'original, par correspondance
+        EXACTE de chemin, pour ne jamais le supprimer.
+
+        On n'utilise PAS le repli par nom ici : sinon tous les homonymes de
+        l'original (très fréquents entre doublons) seraient protégés et plus
+        aucune copie ne serait supprimée."""
+        exact = self.file_index.resoudre_chemin_exact(original.get('chemin', ''))
+        if exact:
+            return {os.path.normcase(os.path.abspath(exact))}
+        return set()
 
     def _thread_suppression(self, total, verifier_md5, corbeille):
         """Thread de suppression sécurisée avec rapport en temps réel."""
@@ -718,36 +723,41 @@ class ApplicationDoublons:
             self.root.after(0, self._finaliser_suppression, supprimes, erreurs, corbeille)
 
     def _selectionner_cible(self, nom, chemin_csv, hash_md5, originaux, verifier_md5, erreurs):
-        """Choisit le fichier à supprimer parmi les candidats, en excluant
-        l'original et (option) en vérifiant le MD5. Renvoie None si rien de sûr."""
+        """Choisit le fichier à supprimer, en excluant l'original et (option)
+        en vérifiant le MD5. Renvoie None si rien de sûr.
+
+        Stratégie : chemin EXACT d'abord (cas normal et le plus sûr), puis
+        repli par nom en dernier recours, toujours filtré par contenu."""
         if not chemin_csv:
             erreurs.append({'nom': nom, 'erreur': 'Pas de chemin dans le CSV'})
             return None
 
-        candidats = self.file_index.trouver_candidats(nom, chemin_csv)
-        # Ne jamais supprimer l'original
-        candidats = [
-            c for c in candidats
-            if os.path.normcase(os.path.abspath(c)) not in originaux
-        ]
-        if not candidats:
-            erreurs.append({'nom': nom, 'chemin_csv': chemin_csv,
-                            'erreur': 'Introuvable (ou seul l\'original existe)'})
-            return None
-
-        if not verifier_md5:
-            return candidats[0]
-
-        # Vérifier le MD5 réel : ne supprimer que si le contenu correspond
         attendu = (hash_md5 or '').lower()
-        for c in candidats:
+
+        def est_original(p):
+            return os.path.normcase(os.path.abspath(p)) in originaux
+
+        def md5_ok(p):
+            if not verifier_md5:
+                return True
             try:
-                if calculer_md5(c).lower() == attendu:
-                    return c
+                return calculer_md5(p).lower() == attendu
             except OSError:
-                continue
-        erreurs.append({'nom': nom, 'chemin_csv': chemin_csv,
-                        'erreur': 'Aucun candidat avec MD5 correspondant (ignoré par sécurité)'})
+                return False
+
+        # 1) Correspondance exacte de chemin (cas normal)
+        exact = self.file_index.resoudre_chemin_exact(chemin_csv)
+        if exact and not est_original(exact) and md5_ok(exact):
+            return exact
+
+        # 2) Repli par nom : seulement les fichiers au bon contenu, jamais l'original
+        for c in self.file_index.candidats_par_nom(nom):
+            if not est_original(c) and md5_ok(c):
+                return c
+
+        message = ('Aucun fichier correspondant (chemin/MD5) - ignoré par sécurité'
+                   if verifier_md5 else 'Introuvable (ou seul l\'original existe)')
+        erreurs.append({'nom': nom, 'chemin_csv': chemin_csv, 'erreur': message})
         return None
 
     def _update_progress(self, progress, current, total, current_file):
