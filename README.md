@@ -103,6 +103,7 @@ python application_doublon.py
 
 - 🔐 Le **MD5 du fichier réel** est recalculé et comparé au CSV avant suppression : un fichier dont le contenu ne correspond pas est **ignoré**.
 - 🛡️ L'**original** (le plus ancien de chaque groupe) n'est **jamais** supprimé.
+- 🎯 Les **noms de fichiers identiques** dans des dossiers différents sont gérés sans confusion : le fichier ciblé est résolu par son **chemin exact**, et seulement à défaut par son nom (toujours filtré par MD5).
 - ♻️ Suppression vers la **corbeille** par défaut → **réversible**.
 - 📄 Un **rapport** détaillé est généré dans `Rapports_Doublons/` après chaque opération.
 
@@ -111,10 +112,24 @@ python application_doublon.py
 ```
 Script_Suppression_Doublons-main/
 ├── application_doublon.py        ← Le cœur de l'appli (tout le code)
+├── test_doublons.py               ← Tests de la logique (sans interface)
 ├── launcher_application.bat       ← Lanceur simple pour Windows
 ├── requirements.txt               ← Dépendance optionnelle (send2trash)
 └── README.md                      ← Ce fichier
 ```
+
+### 🧪 Tests
+
+La logique sensible (indexation, gestion des noms identiques, vérification MD5,
+exclusion de l'original, tri par date, suppression réelle) est couverte par des
+tests **sans interface graphique** :
+
+```bash
+python test_doublons.py
+```
+
+Attendu : `RESULTAT: TOUS LES TESTS PASSENT [OK]`. Les tests s'exécutent dans un
+dossier temporaire et ne touchent à aucun de vos fichiers.
 
 ### Performances
 
