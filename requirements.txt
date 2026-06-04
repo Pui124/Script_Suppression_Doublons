@@ -1,0 +1,4 @@
+# Dépendance optionnelle : envoi à la corbeille (suppression réversible).
+# Si absente, l'application bascule sur une suppression définitive (os.remove)
+# après avertissement explicite.
+send2trash>=1.8
