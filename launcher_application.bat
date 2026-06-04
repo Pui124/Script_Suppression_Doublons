@@ -39,20 +39,27 @@ echo Python trouvé:
 python --version
 echo.
 
-REM Chercher le fichier app_doublons.py
-if not exist "app_doublons.py" (
+REM Chercher le fichier application_doublon.py
+if not exist "application_doublon.py" (
     echo.
-    echo ERREUR: app_doublons.py non trouvé
-    echo Assurez-vous de lancer le script depuis le dossier contenant app_doublons.py
+    echo ERREUR: application_doublon.py non trouvé
+    echo Assurez-vous de lancer le script depuis le dossier contenant application_doublon.py
     echo.
     pause
     exit /b 1
 )
 
+REM Installer la dependance optionnelle pour la corbeille (best effort)
+python -c "import send2trash" >nul 2>&1
+if errorlevel 1 (
+    echo Installation de send2trash ^(corbeille^)...
+    python -m pip install --quiet send2trash >nul 2>&1
+)
+
 REM Lancer l'application
 echo "Lancement de l'application..."
 echo.
-python app_doublons.py
+python application_doublon.py
 
 if errorlevel 1 (
     echo.
