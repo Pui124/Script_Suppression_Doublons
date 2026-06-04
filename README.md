@@ -12,16 +12,17 @@ Vous avez des **milliers de fichiers dupliqués** en double sur votre disque?
 Cette application vous permet de:
 
 ✅ **Charger** un fichier liste de doublons (CSV)  
-✅ **Analyser** les fichiers trouvés  
-✅ **Supprimer** automatiquement les doublons en 1 clic  
-✅ **Voir** les résultats en temps réel  
+✅ **Analyser** les fichiers trouvés (automatique dès que CSV + dossier sont chargés)  
+✅ **Vérifier** le contenu réel des fichiers (empreinte MD5) avant toute suppression  
+✅ **Supprimer** les doublons en 1 clic — **vers la corbeille** (réversible) par défaut  
+✅ **Voir** les résultats en temps réel et **annuler** à tout moment  
 
 **Avant:** Supprimer 1000 fichiers manuellement = 5-10 minutes 😴  
 **Après:** Supprimer avec cette app = 10-30 secondes ⚡
 
 ---
 
-## 📦 Installation (3 étapes)
+## 📦 Installation (4 étapes)
 
 ### ✅ Étape 1 : Avoir Python sur votre ordinateur
 
@@ -37,15 +38,24 @@ python --version
 Cliquer sur le bouton vert **`<> Code`** → **`Download ZIP`**  
 Puis extraire le dossier sur votre ordinateur.
 
-### ✅ Étape 3 : Lancer l'application
+### ✅ Étape 3 : Installer la dépendance corbeille (recommandé)
+
+Pour que les fichiers aillent à la **corbeille** (suppression réversible) :
+```bash
+python -m pip install -r requirements.txt
+```
+> 💡 Optionnel : sans `send2trash`, l'application fonctionne quand même mais la suppression devient **définitive** (avec un avertissement clair).
+
+### ✅ Étape 4 : Lancer l'application
 
 #### Méthode Simple (Windows)
-Double-cliquer sur le fichier `launcher_application.bat`
+Double-cliquer sur le fichier `launcher_application.bat`  
+*(il installe `send2trash` automatiquement si besoin)*
 
 #### Méthode Manuelle
 Ouvrir PowerShell/Terminal et taper :
 ```bash
-cd C:\Users\VotreUtilisateur\...\Script_Suppresion_V4
+cd C:\Users\VotreUtilisateur\...\Script_Suppression_Doublons-main
 python application_doublon.py
 ```
 
@@ -58,20 +68,21 @@ python application_doublon.py
 ```
 1️⃣ L'application démarre
    ↓
-2️⃣ Cliquer sur "Charger CSV"
+2️⃣ Cliquer sur "Parcourir CSV"
    → Sélectionner le fichier .csv créé par Archifiltre
    ↓
-3️⃣ Cliquer sur "Sélectionner Répertoire"
+3️⃣ Cliquer sur "Parcourir dossier"
    → Choisir le dossier principal où se trouvent vos fichiers
+   → L'analyse se lance AUTOMATIQUEMENT (pas de bouton "Analyser")
    ↓
-4️⃣ Cliquer sur "Analyser"
-   → L'app scanne le dossier et cherche les doublons
+4️⃣ Vérifier les résultats
+   → Nombre de doublons trouvés, espace à libérer
    ↓
-5️⃣ Vérifier les résultats
-   → Nombre de doublons trouvés, espace économisé
+5️⃣ (Options) Choisir : vérification MD5 ✅ et corbeille ♻️
    ↓
-6️⃣ Cliquer sur "Supprimer Doublons"
-   → Les fichiers en double sont supprimés définitivement
+6️⃣ Cliquer sur "Supprimer les doublons"
+   → Confirmation, puis suppression vers la corbeille (réversible)
+   → Bouton "Annuler" disponible pendant l'opération
    ↓
 7️⃣ ✅ Terminé! Voir le rapport généré
 ```
@@ -85,14 +96,23 @@ python application_doublon.py
 - 🐍 **Python 3.8+** - Langage de programmation
 - 🎨 **Tkinter** - Interface graphique simple
 - 📊 **Threading** - Traitement sans bloquer l'interface
-- 🔐 **Hashlib** - Vérification des fichiers en double
+- 🔐 **Hashlib (MD5)** - Vérifie le contenu réel des fichiers avant suppression
+- ♻️ **send2trash** *(optionnel)* - Envoi à la corbeille (suppression réversible)
+
+### Sécurité des suppressions
+
+- 🔐 Le **MD5 du fichier réel** est recalculé et comparé au CSV avant suppression : un fichier dont le contenu ne correspond pas est **ignoré**.
+- 🛡️ L'**original** (le plus ancien de chaque groupe) n'est **jamais** supprimé.
+- ♻️ Suppression vers la **corbeille** par défaut → **réversible**.
+- 📄 Un **rapport** détaillé est généré dans `Rapports_Doublons/` après chaque opération.
 
 ### Structure du Projet
 
 ```
-Script_Suppresion_V4/
+Script_Suppression_Doublons-main/
 ├── application_doublon.py        ← Le cœur de l'appli (tout le code)
 ├── launcher_application.bat       ← Lanceur simple pour Windows
+├── requirements.txt               ← Dépendance optionnelle (send2trash)
 └── README.md                      ← Ce fichier
 ```
 
@@ -109,9 +129,10 @@ Script_Suppresion_V4/
 ## 💡 Conseils d'Utilisation
 
 ⚠️ **IMPORTANT** :
-- ✅ Faire une **sauvegarde** avant de supprimer
+- ✅ Faire une **sauvegarde** avant de supprimer (bonne pratique, même avec la corbeille)
 - ✅ **Vérifier** les fichiers à supprimer dans l'aperçu
-- ⚠️ **Impossible d'annuler** une suppression (les fichiers ne vont pas à la corbeille)
+- ♻️ Par défaut, les fichiers vont à la **corbeille** → récupérables
+- ⚠️ Si `send2trash` n'est pas installé (ou option décochée), la suppression est **définitive**
 
 ---
 
