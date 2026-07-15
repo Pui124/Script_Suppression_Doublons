@@ -47,6 +47,11 @@ rapport_*.txt
 
 # Fichiers de rapports (générés)
 Rapport_*.txt
+Rapports_Doublons/
+
+# Archives de test (générées par generer_archives_test.py)
+Archives_Test*/
+*_archifiltre.csv
 
 # Autres
 .env
