@@ -1,15 +1,21 @@
 #!/usr/bin/env python3
 """
-Application GUI pour supprimer les doublons Archifiltre - Version 5.0
-Corrections v5.0:
+Application GUI pour supprimer les doublons Archifiltre - Version 5.1
+Nouveautés v5.1 (refonte ergonomique) :
+- Interface modernisée : cartes à fond blanc, boutons plats avec survol,
+  interrupteurs à bascule, tuiles de statistiques, barre d'état intégrée
+- Champ de filtre instantané sur nom/chemin (Ctrl+F, Échap pour effacer)
+- Chargement CSV et indexation du répertoire en arrière-plan (interface fluide)
+- Groupes repliables/dépliables (colonne flèche) + case à cocher de groupe
+- Sélection conservée lors du filtrage (état par fichier, plus par ligne)
+- Options de suppression déplacées à côté du bouton d'action
+
+Corrections v5.0 :
 - Bug corrigé : résolution de chemin format Archifiltre (/NomRacine/subdir/fichier)
 - Bug corrigé : détection flexible de la colonne de date (plusieurs noms possibles)
-- Interface : Treeview avec sélection individuelle par case à cocher
-- Interface : PanedWindow redimensionnable, scrollbar horizontale
-- Interface : statut par fichier (✓/✗) mis à jour en temps réel pendant suppression
-- Interface : fenêtre de diagnostic de correspondance chemin CSV ↔ disque
-- Interface : sélection de rapport parmi plusieurs
 - Suppression sélective : cocher/décocher chaque copie avant suppression
+- Statut par fichier (OK/erreur) mis à jour en temps réel pendant suppression
+- Fenêtre de diagnostic de correspondance chemin CSV <-> disque
 - Meilleure gestion des erreurs Windows (PermissionError, fichiers verrouillés)
 - Rapport sauvegardé dans le dossier du script
 """
@@ -51,17 +57,25 @@ FORMATS_DATE = (
 )
 
 COLORS = {
-    'primary':   '#EF7757',
-    'secondary': '#292575',
-    'accent1':   '#8E84AE',
-    'accent2':   '#C6BFD8',
-    'accent3':   '#E7E4EF',
-    'bg':        '#F5F3F8',
-    'text':      '#2C2C2C',
-    'success':   '#4CAF50',
-    'error':     '#F44336',
-    'warning':   '#FF9800',
+    'primary':     '#EF7757',   # orange — action principale
+    'primary_h':   '#E2653F',   # orange survol
+    'primary_p':   '#C9532F',   # orange enfoncé
+    'secondary':   '#292575',   # bleu foncé — en-têtes, titres
+    'secondary_h': '#3B36A0',
+    'accent1':     '#8E84AE',
+    'accent2':     '#C6BFD8',
+    'accent3':     '#E7E4EF',
+    'bg':          '#F4F3F9',   # fond général
+    'card':        '#FFFFFF',   # fond des cartes
+    'border':      '#DEDAEB',   # bordure des cartes
+    'muted':       '#8A87A3',   # texte secondaire
+    'text':        '#2C2C2C',
+    'success':     '#3E9D4D',
+    'error':       '#D64541',
+    'warning':     '#E58900',
 }
+
+FONT       = 'Segoe UI'
 
 # Dossier du script (pour y stocker les rapports)
 SCRIPT_DIR = Path(__file__).parent.resolve()
@@ -115,6 +129,111 @@ def ouvrir_explorateur(chemin):
             subprocess.Popen(['explorer', os.path.normpath(cible)])
     except Exception:
         pass
+
+
+# ── Widgets personnalisés ─────────────────────────────────────────────────────
+
+class FlatButton(tk.Button):
+    """Bouton plat moderne avec effet de survol et curseur main."""
+
+    KINDS = {
+        # kind: (fond, texte, survol, enfoncé)
+        'primary':   (COLORS['primary'],   'white',              COLORS['primary_h'],   COLORS['primary_p']),
+        'secondary': (COLORS['secondary'], 'white',              COLORS['secondary_h'], '#1E1B5C'),
+        'ghost':     (COLORS['card'],      COLORS['secondary'],  COLORS['accent3'],     COLORS['accent2']),
+        'danger':    (COLORS['error'],     'white',              '#C13A36',             '#A32F2B'),
+    }
+
+    def __init__(self, parent, text='', command=None, kind='ghost', small=False, **kw):
+        bg, fg, hover, pressed = self.KINDS[kind]
+        font = (FONT, 9) if small else (FONT, 10, 'bold' if kind == 'primary' else 'normal')
+        padx, pady = (10, 4) if small else (16, 7)
+        super().__init__(
+            parent, text=text, command=command,
+            bg=bg, fg=fg, activebackground=pressed, activeforeground=fg,
+            disabledforeground='#A5A3B8',
+            relief='flat', bd=0, cursor='hand2',
+            font=font, padx=padx, pady=pady,
+            highlightthickness=1 if kind == 'ghost' else 0,
+            highlightbackground=COLORS['border'],
+            **kw
+        )
+        self._bg, self._fg, self._hover = bg, fg, hover
+        self.bind('<Enter>', self._on_enter)
+        self.bind('<Leave>', self._on_leave)
+
+    def _on_enter(self, _):
+        if str(self['state']) != 'disabled':
+            self.config(bg=self._hover)
+
+    def _on_leave(self, _):
+        if str(self['state']) != 'disabled':
+            self.config(bg=self._bg)
+
+    def set_enabled(self, enabled):
+        if enabled:
+            self.config(state=tk.NORMAL, bg=self._bg, fg=self._fg, cursor='hand2')
+        else:
+            self.config(state=tk.DISABLED, bg='#DEDCE9', cursor='arrow')
+
+
+class ToggleRow(tk.Frame):
+    """Interrupteur à bascule dessiné (Canvas) avec libellé et sous-texte."""
+
+    def __init__(self, parent, variable, text, subtext='', state='normal', bg=None):
+        bg = bg or COLORS['bg']
+        super().__init__(parent, bg=bg)
+        self.var    = variable
+        self._state = state
+        self._bg    = bg
+
+        self.canvas = tk.Canvas(self, width=40, height=22, bg=bg,
+                                highlightthickness=0,
+                                cursor='hand2' if state == 'normal' else 'arrow')
+        self.canvas.pack(side=tk.LEFT)
+
+        lblf = tk.Frame(self, bg=bg)
+        lblf.pack(side=tk.LEFT, padx=(8, 0))
+        self.lbl = tk.Label(lblf, text=text, bg=bg, fg=COLORS['text'],
+                            font=(FONT, 9, 'bold'), anchor='w', cursor='hand2')
+        self.lbl.pack(anchor='w')
+        self.sub = None
+        if subtext:
+            self.sub = tk.Label(lblf, text=subtext, bg=bg, fg=COLORS['muted'],
+                                font=(FONT, 8), anchor='w')
+            self.sub.pack(anchor='w')
+
+        self.canvas.bind('<Button-1>', self._toggle)
+        self.lbl.bind('<Button-1>', self._toggle)
+        self._draw()
+
+    def _toggle(self, _=None):
+        if self._state == 'disabled':
+            return
+        self.var.set(not self.var.get())
+        self._draw()
+
+    def set_state(self, state):
+        self._state = state
+        cursor = 'hand2' if state == 'normal' else 'arrow'
+        self.canvas.config(cursor=cursor)
+        self.lbl.config(cursor=cursor,
+                        fg=COLORS['text'] if state == 'normal' else COLORS['muted'])
+        self._draw()
+
+    def _draw(self):
+        c = self.canvas
+        c.delete('all')
+        on    = bool(self.var.get())
+        track = COLORS['primary'] if on else COLORS['accent2']
+        if self._state == 'disabled':
+            track = '#DDDBE8'
+        # Piste arrondie : deux disques + rectangle central
+        c.create_oval(1, 3, 19, 21, fill=track, outline=track)
+        c.create_oval(21, 3, 39, 21, fill=track, outline=track)
+        c.create_rectangle(10, 3, 30, 21, fill=track, outline=track)
+        x = 24 if on else 3
+        c.create_oval(x, 5, x + 14, 19, fill='white', outline='#EDEBF4')
 
 
 # ── Classes de données ────────────────────────────────────────────────────────
@@ -249,18 +368,21 @@ class FileIndex:
 # ── Application principale ────────────────────────────────────────────────────
 
 class ApplicationDoublons:
-    _CB_ON  = '☑'
-    _CB_OFF = '☐'
+    _CB_ON      = '☑'
+    _CB_OFF     = '☐'
+    _CB_PARTIEL = '▬'
+    _STATUS_DEFAUT = ("Prêt — chargez le CSV puis le répertoire source.  "
+                      "Astuce : double-clic sur une ligne pour l'ouvrir dans l'explorateur")
 
     def __init__(self, root):
         self.root = root
-        self.root.title("Suppression des Doublons Archifiltre — v5.0")
+        self.root.title("Suppression des Doublons Archifiltre — v5.1")
 
         sw, sh = root.winfo_screenwidth(), root.winfo_screenheight()
         ww = min(int(sw * 0.90), 1500)
         wh = min(int(sh * 0.90), 1000)
         self.root.geometry(f"{ww}x{wh}+{(sw-ww)//2}+{(sh-wh)//2}")
-        self.root.minsize(900, 620)
+        self.root.minsize(940, 640)
 
         self.setup_style()
 
@@ -269,223 +391,301 @@ class ApplicationDoublons:
         self.donnees           = []
         self.doublons          = {}
         self.doublons_stats    = None
-        self.suppression_thread    = None
+        self.suppression_thread     = None
         self.cancellation_requested = False
         self._date_colonne     = None
 
-        self._items_sel   = {}   # {item_id: bool}  copies Treeview
-        self._copie_key   = {}   # {(hash, nom, chemin): item_id}
+        # État de sélection par copie, indépendant de l'affichage (survit au filtre)
+        self._all_keys = []   # [(hash, nom, chemin), ...] toutes les copies
+        self._sel      = {}   # {key: bool}
+        self._statut   = {}   # {key: (texte, tag)} statut de suppression
+        self._key_iid  = {}   # {key: item_id}  vue courante du Treeview
+        self._iid_key  = {}   # {item_id: key}
+
+        self._busy    = False   # chargement CSV / indexation en cours
+        self._running = False   # suppression en cours
+        self._filtre_job = None
 
         self.file_index = FileIndex()
 
         self.verifier_md5 = tk.BooleanVar(value=True)
         self.use_trash    = tk.BooleanVar(value=SEND2TRASH_AVAILABLE)
 
-        self._paned = None  # référence au PanedWindow pour sash
         self.setup_ui()
+        self.root.protocol('WM_DELETE_WINDOW', self.quitter)
 
     # ── Style ────────────────────────────────────────────────────────────────
 
     def setup_style(self):
         s = ttk.Style()
         s.theme_use('clam')
-        s.configure('TFrame',        background=COLORS['bg'])
-        s.configure('TLabel',        background=COLORS['bg'], foreground=COLORS['text'])
-        s.configure('TCheckbutton',  background=COLORS['bg'], foreground=COLORS['text'])
-        s.configure('Header.TLabel', background=COLORS['secondary'], foreground='white',
-                    font=('Segoe UI', 13, 'bold'), padding=10)
-        s.configure('Title.TLabel',  background=COLORS['bg'], foreground=COLORS['secondary'],
-                    font=('Segoe UI', 10, 'bold'))
-        s.configure('Subtitle.TLabel', background=COLORS['bg'], foreground=COLORS['accent1'],
-                    font=('Segoe UI', 9))
-        s.configure('Stat.TLabel',   background=COLORS['accent3'], foreground=COLORS['secondary'],
-                    font=('Segoe UI', 10, 'bold'), padding=4, relief='solid', borderwidth=1)
-        s.configure('TButton',       font=('Segoe UI', 9))
-        s.map('TButton', background=[('active', COLORS['primary'])], foreground=[('active', 'white')])
-        s.configure('Primary.TButton', background=COLORS['primary'])
-        s.map('Primary.TButton', background=[('active', '#D96B4D'), ('pressed', '#B35A42')])
-        s.configure('Cancel.TButton', background=COLORS['error'])
-        s.map('Cancel.TButton', background=[('active', '#DA321C'), ('pressed', '#B52812')])
-        s.configure('Warn.TButton', background=COLORS['warning'])
-        s.map('Warn.TButton', background=[('active', '#E68900')])
-        s.configure('TLabelframe',       background=COLORS['bg'], borderwidth=1, relief='solid')
-        s.configure('TLabelframe.Label', background=COLORS['bg'], foreground=COLORS['secondary'],
-                    font=('Segoe UI', 9, 'bold'))
-        s.configure('TProgressbar', background=COLORS['primary'], troughcolor=COLORS['accent3'])
-        s.configure('Treeview',         font=('Segoe UI', 9), rowheight=22, background='white')
-        s.configure('Treeview.Heading', font=('Segoe UI', 9, 'bold'),
-                    background=COLORS['secondary'], foreground='white')
-        s.map('Treeview', background=[('selected', COLORS['accent2'])])
+        s.configure('TFrame', background=COLORS['bg'])
+        s.configure('Horizontal.TProgressbar',
+                    background=COLORS['primary'], troughcolor=COLORS['accent3'],
+                    borderwidth=0, thickness=8)
+        s.configure('Treeview',
+                    font=(FONT, 9), rowheight=26,
+                    background=COLORS['card'], fieldbackground=COLORS['card'],
+                    borderwidth=0, relief='flat')
+        s.configure('Treeview.Heading',
+                    font=(FONT, 9, 'bold'),
+                    background=COLORS['secondary'], foreground='white',
+                    relief='flat', padding=6)
+        s.map('Treeview.Heading', background=[('active', COLORS['secondary_h'])])
+        s.map('Treeview', background=[('selected', COLORS['accent3'])],
+                          foreground=[('selected', COLORS['text'])])
+        s.configure('TScrollbar',
+                    background=COLORS['accent2'], troughcolor=COLORS['bg'],
+                    borderwidth=0, arrowsize=12)
+        s.map('TScrollbar', background=[('active', COLORS['accent1'])])
         self.root.configure(bg=COLORS['bg'])
+
+    # ── Aides de construction ─────────────────────────────────────────────────
+
+    def _carte(self, parent):
+        """Carte à fond blanc avec bordure fine."""
+        return tk.Frame(parent, bg=COLORS['card'],
+                        highlightbackground=COLORS['border'], highlightthickness=1)
+
+    def _carte_fichier(self, parent, icone, titre, action, texte_vide='Aucun fichier chargé'):
+        """Carte de sélection de fichier/répertoire. Retourne (carte, label_état, bouton)."""
+        card  = self._carte(parent)
+        inner = tk.Frame(card, bg=COLORS['card'])
+        inner.pack(fill=tk.BOTH, expand=True, padx=12, pady=10)
+
+        top = tk.Frame(inner, bg=COLORS['card'])
+        top.pack(fill=tk.X)
+        tk.Label(top, text=icone, bg=COLORS['card'],
+                 font=(FONT, 13)).pack(side=tk.LEFT)
+        tk.Label(top, text=titre, bg=COLORS['card'], fg=COLORS['secondary'],
+                 font=(FONT, 10, 'bold')).pack(side=tk.LEFT, padx=(6, 0))
+        btn = FlatButton(top, text='Parcourir…', command=action, kind='ghost', small=True)
+        btn.pack(side=tk.RIGHT)
+
+        lbl = tk.Label(inner, text=f'●  {texte_vide}', bg=COLORS['card'],
+                       fg=COLORS['muted'], font=(FONT, 9),
+                       anchor='w', justify=tk.LEFT, wraplength=560)
+        lbl.pack(fill=tk.X, pady=(6, 0))
+        return card, lbl, btn
+
+    def _tuile_stat(self, parent, caption):
+        """Tuile de statistique : liseré orange, grande valeur, légende."""
+        card = self._carte(parent)
+        tk.Frame(card, bg=COLORS['primary'], height=3).pack(fill=tk.X)
+        val = tk.Label(card, text='0', bg=COLORS['card'], fg=COLORS['secondary'],
+                       font=(FONT, 16, 'bold'))
+        val.pack(pady=(8, 0), padx=12)
+        tk.Label(card, text=caption, bg=COLORS['card'], fg=COLORS['muted'],
+                 font=(FONT, 8)).pack(pady=(0, 8), padx=12)
+        return card, val
 
     # ── Interface ─────────────────────────────────────────────────────────────
 
     def setup_ui(self):
-        main = ttk.Frame(self.root, padding=8)
-        main.pack(fill=tk.BOTH, expand=True)
+        # ── Bandeau d'en-tête ──
+        header = tk.Frame(self.root, bg=COLORS['secondary'])
+        header.pack(fill=tk.X)
+        hin = tk.Frame(header, bg=COLORS['secondary'])
+        hin.pack(fill=tk.X, padx=18, pady=12)
+        tk.Label(hin, text='Suppression des Doublons', bg=COLORS['secondary'],
+                 fg='white', font=(FONT, 15, 'bold')).pack(side=tk.LEFT)
+        tk.Label(hin, text=' v5.1 ', bg=COLORS['primary'], fg='white',
+                 font=(FONT, 8, 'bold')).pack(side=tk.LEFT, padx=(10, 0), pady=(4, 0))
+        tk.Label(hin, text='Nettoyage des fichiers dupliqués détectés par Archifiltre',
+                 bg=COLORS['secondary'], fg=COLORS['accent2'],
+                 font=(FONT, 9)).pack(side=tk.RIGHT, pady=(4, 0))
+        tk.Frame(self.root, bg=COLORS['primary'], height=3).pack(fill=tk.X)
 
-        # En-tête
-        ttk.Label(main, text="🗂️  Suppression des Doublons Archifiltre  —  v5.0",
-                  style='Header.TLabel').pack(fill=tk.X, pady=(0, 8))
+        body = tk.Frame(self.root, bg=COLORS['bg'])
+        body.pack(fill=tk.BOTH, expand=True, padx=14, pady=12)
 
-        # PanedWindow vertical : contrôles (haut) / liste doublons (bas)
-        paned = tk.PanedWindow(main, orient=tk.VERTICAL, sashwidth=7,
-                               sashrelief='raised', bg=COLORS['accent2'])
-        paned.pack(fill=tk.BOTH, expand=True)
-        self._paned = paned
+        # ── Rangée 1 : sources ──
+        row1 = tk.Frame(body, bg=COLORS['bg'])
+        row1.pack(fill=tk.X)
+        row1.columnconfigure(0, weight=1, uniform='src')
+        row1.columnconfigure(1, weight=1, uniform='src')
 
-        # ── Panneau haut ──
-        top = ttk.Frame(paned, padding=4)
-        paned.add(top, minsize=270)
+        card_csv, self.csv_label, self.btn_csv = self._carte_fichier(
+            row1, '📋', 'Export CSV Archifiltre', self.charger_csv)
+        card_csv.grid(row=0, column=0, sticky='nsew', padx=(0, 5))
+        card_rep, self.rep_label, self.btn_rep = self._carte_fichier(
+            row1, '📁', 'Répertoire source', self.charger_repertoire,
+            texte_vide='Aucun répertoire chargé')
+        card_rep.grid(row=0, column=1, sticky='nsew', padx=(5, 0))
 
-        # Chargement
-        lf_load = ttk.Labelframe(top, text="1. CHARGER LES FICHIERS", padding=8)
-        lf_load.pack(fill=tk.X, pady=(0, 6))
-
-        for label_txt, attr, cmd in [
-            ("📋 CSV Archifiltre :", 'csv_label', self.charger_csv),
-            ("📁 Répertoire source :", 'rep_label', self.charger_repertoire),
-        ]:
-            row = ttk.Frame(lf_load)
-            row.pack(fill=tk.X, pady=3)
-            ttk.Label(row, text=label_txt, style='Title.TLabel', width=22).pack(side=tk.LEFT)
-            lbl = ttk.Label(row, text="❌ Aucun", foreground=COLORS['error'],
-                            font=('Segoe UI', 9), wraplength=700, anchor=tk.W)
-            lbl.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=(4, 8))
-            ttk.Button(row, text="Parcourir…", command=cmd).pack(side=tk.RIGHT)
-            setattr(self, attr, lbl)
-
-        # Stats + Options
-        mid = ttk.Frame(top)
-        mid.pack(fill=tk.X, pady=(0, 6))
-        mid.columnconfigure(0, weight=3)
-        mid.columnconfigure(1, weight=2)
-
-        lf_stats = ttk.Labelframe(mid, text="2. STATISTIQUES", padding=8)
-        lf_stats.grid(row=0, column=0, sticky='nsew', padx=(0, 6))
-        sg = ttk.Frame(lf_stats)
-        sg.pack(fill=tk.X)
-        sg.columnconfigure(0, weight=1)
-        sg.columnconfigure(1, weight=1)
-        for idx, (txt, attr, val) in enumerate([
-            ("📊 Fichiers analysés",   'label_fichiers',    '0'),
-            ("🔗 Groupes de doublons", 'label_groupes',     '0'),
-            ("🗑️  Copies à supprimer", 'label_a_supprimer', '0'),
-            ("💾 Espace à libérer",    'label_espace',      '0 o'),
+        # ── Rangée 2 : statistiques ──
+        row2 = tk.Frame(body, bg=COLORS['bg'])
+        row2.pack(fill=tk.X, pady=(10, 0))
+        for i in range(4):
+            row2.columnconfigure(i, weight=1, uniform='stat')
+        for i, (caption, attr) in enumerate([
+            ('Fichiers analysés',   'label_fichiers'),
+            ('Groupes de doublons', 'label_groupes'),
+            ('Copies à supprimer',  'label_a_supprimer'),
+            ('Espace à libérer',    'label_espace'),
         ]):
-            fr = ttk.Frame(sg)
-            fr.grid(row=idx // 2, column=idx % 2, sticky=tk.EW, padx=4, pady=4)
-            ttk.Label(fr, text=txt, style='Subtitle.TLabel').pack(side=tk.LEFT, padx=(0, 6))
-            lbl = ttk.Label(fr, text=val, style='Stat.TLabel')
-            lbl.pack(side=tk.LEFT)
-            setattr(self, attr, lbl)
+            card, val = self._tuile_stat(row2, caption)
+            card.grid(row=0, column=i, sticky='nsew',
+                      padx=(0 if i == 0 else 5, 0 if i == 3 else 5))
+            setattr(self, attr, val)
+        self.label_espace.config(text='0 o')
 
-        lf_opt = ttk.Labelframe(mid, text="OPTIONS", padding=8)
-        lf_opt.grid(row=0, column=1, sticky='nsew')
-        ttk.Checkbutton(lf_opt,
-            text="🔐 Vérifier MD5 avant suppression\n   (recommandé, plus lent)",
-            variable=self.verifier_md5).pack(anchor=tk.W, pady=4)
-        trash_txt = "♻️  Corbeille (réversible)"
-        if not SEND2TRASH_AVAILABLE:
-            trash_txt += "\n   ⚠️ send2trash absent → DÉFINITIF"
-        cb_trash = ttk.Checkbutton(lf_opt, text=trash_txt, variable=self.use_trash)
-        cb_trash.pack(anchor=tk.W, pady=4)
-        if not SEND2TRASH_AVAILABLE:
-            cb_trash.configure(state=tk.DISABLED)
+        # ── Rangée 3 : liste des doublons ──
+        card_list = self._carte(body)
+        card_list.pack(fill=tk.BOTH, expand=True, pady=(10, 0))
+        list_in = tk.Frame(card_list, bg=COLORS['card'])
+        list_in.pack(fill=tk.BOTH, expand=True, padx=10, pady=8)
 
-        # Progression
-        lf_prog = ttk.Frame(top)
-        lf_prog.pack(fill=tk.X, pady=(0, 4))
-        ttk.Label(lf_prog, text="Progression :", style='Subtitle.TLabel').pack(anchor=tk.W)
-        self.progress_bar  = ttk.Progressbar(lf_prog, mode='determinate')
-        self.progress_bar.pack(fill=tk.X, pady=(2, 2))
-        self.progress_text = ttk.Label(lf_prog, text="Prêt", style='Subtitle.TLabel')
-        self.progress_text.pack(anchor=tk.W)
+        tvbar = tk.Frame(list_in, bg=COLORS['card'])
+        tvbar.pack(fill=tk.X, pady=(0, 6))
+        tk.Label(tvbar, text='Doublons détectés', bg=COLORS['card'],
+                 fg=COLORS['secondary'], font=(FONT, 11, 'bold')).pack(side=tk.LEFT)
 
-        # ── Panneau bas : Treeview ──
-        bot = ttk.Frame(paned, padding=4)
-        paned.add(bot, minsize=180)
+        # Champ de filtre avec placeholder
+        self._filtre_placeholder = '🔍  Filtrer par nom ou chemin…  (Ctrl+F)'
+        self.filtre_entry = tk.Entry(
+            tvbar, width=34, relief='flat', font=(FONT, 9),
+            bg=COLORS['bg'], fg=COLORS['muted'],
+            highlightthickness=1, highlightbackground=COLORS['border'],
+            highlightcolor=COLORS['primary'], insertbackground=COLORS['text'])
+        self.filtre_entry.pack(side=tk.LEFT, padx=(14, 0), ipady=4)
+        self.filtre_entry.insert(0, self._filtre_placeholder)
+        self._filtre_vide = True
+        self.filtre_entry.bind('<FocusIn>',  self._filtre_focus_in)
+        self.filtre_entry.bind('<FocusOut>', self._filtre_focus_out)
+        self.filtre_entry.bind('<KeyRelease>', self._on_filtre)
+        self.filtre_entry.bind('<Escape>', self._filtre_effacer)
 
-        lf_list = ttk.Labelframe(bot, text="3. DOUBLONS DÉTECTÉS", padding=6)
-        lf_list.pack(fill=tk.BOTH, expand=True)
-
-        # Barre d'outils du Treeview
-        tvbar = ttk.Frame(lf_list)
-        tvbar.pack(fill=tk.X, pady=(0, 4))
-        ttk.Button(tvbar, text="☑ Tout",   command=self._tout_sel).pack(side=tk.LEFT, padx=2)
-        ttk.Button(tvbar, text="☐ Aucun",  command=self._tout_desel).pack(side=tk.LEFT, padx=2)
-        ttk.Button(tvbar, text="🔍 Diagnostiquer chemins",
+        self.lbl_sel = tk.Label(tvbar, text='', bg=COLORS['card'],
+                                fg=COLORS['muted'], font=(FONT, 9))
+        self.lbl_sel.pack(side=tk.RIGHT)
+        FlatButton(tvbar, text='🔍 Diagnostiquer les chemins',
                    command=self.diagnostiquer_chemins,
-                   style='Warn.TButton').pack(side=tk.LEFT, padx=10)
-        self.lbl_sel = ttk.Label(tvbar, text="", style='Subtitle.TLabel')
-        self.lbl_sel.pack(side=tk.RIGHT, padx=4)
+                   kind='ghost', small=True).pack(side=tk.RIGHT, padx=(0, 12))
+        FlatButton(tvbar, text='☐ Aucun', command=self._tout_desel,
+                   kind='ghost', small=True).pack(side=tk.RIGHT, padx=(0, 4))
+        FlatButton(tvbar, text='☑ Tout', command=self._tout_sel,
+                   kind='ghost', small=True).pack(side=tk.RIGHT, padx=(0, 4))
 
-        # Treeview
-        tv_frame = ttk.Frame(lf_list)
+        # Treeview : colonne #0 = flèche de repli/dépli des groupes
+        tv_frame = tk.Frame(list_in, bg=COLORS['card'])
         tv_frame.pack(fill=tk.BOTH, expand=True)
         tv_frame.rowconfigure(0, weight=1)
         tv_frame.columnconfigure(0, weight=1)
 
         cols = ('sel', 'nom', 'chemin', 'taille', 'statut')
-        self.tree = ttk.Treeview(tv_frame, columns=cols, show='headings', selectmode='none')
-        self.tree.heading('sel',    text='☑',             anchor=tk.CENTER)
-        self.tree.heading('nom',    text='Nom',            anchor=tk.W)
-        self.tree.heading('chemin', text='Chemin (CSV)',   anchor=tk.W)
-        self.tree.heading('taille', text='Taille',         anchor=tk.E)
-        self.tree.heading('statut', text='Statut',         anchor=tk.W)
-        self.tree.column('sel',    width=32,  minwidth=30, stretch=False, anchor=tk.CENTER)
-        self.tree.column('nom',    width=200, minwidth=100)
-        self.tree.column('chemin', width=460, minwidth=150)
-        self.tree.column('taille', width=80,  minwidth=60, anchor=tk.E, stretch=False)
-        self.tree.column('statut', width=180, minwidth=80)
+        self.tree = ttk.Treeview(tv_frame, columns=cols, show='tree headings',
+                                 selectmode='none')
+        self.tree.heading('#0',     text='',              anchor=tk.W)
+        self.tree.heading('sel',    text='☑',             anchor=tk.CENTER,
+                          command=self._toggle_entete)
+        self.tree.heading('nom',    text='Nom',           anchor=tk.W)
+        self.tree.heading('chemin', text='Chemin (CSV)',  anchor=tk.W)
+        self.tree.heading('taille', text='Taille',        anchor=tk.E)
+        self.tree.heading('statut', text='Statut',        anchor=tk.W)
+        self.tree.column('#0',     width=28,  minwidth=28, stretch=False)
+        self.tree.column('sel',    width=36,  minwidth=32, stretch=False, anchor=tk.CENTER)
+        self.tree.column('nom',    width=210, minwidth=100)
+        self.tree.column('chemin', width=470, minwidth=150)
+        self.tree.column('taille', width=100, minwidth=70, anchor=tk.E, stretch=False)
+        self.tree.column('statut', width=170, minwidth=80)
 
         vsb = ttk.Scrollbar(tv_frame, orient='vertical',   command=self.tree.yview)
-        hsb = ttk.Scrollbar(tv_frame, orient='horizontal',  command=self.tree.xview)
+        hsb = ttk.Scrollbar(tv_frame, orient='horizontal', command=self.tree.xview)
         self.tree.configure(yscrollcommand=vsb.set, xscrollcommand=hsb.set)
         self.tree.grid(row=0, column=0, sticky='nsew')
         vsb.grid(row=0, column=1, sticky='ns')
         hsb.grid(row=1, column=0, sticky='ew')
 
         # Tags de couleur
-        self.tree.tag_configure('groupe',    background='#E3F2FD', font=('Segoe UI', 9, 'bold'))
-        self.tree.tag_configure('sel',       background='#F1F8E9')
-        self.tree.tag_configure('desel',     background='#FFF9C4')
-        self.tree.tag_configure('ok',        background='#C8E6C9')
-        self.tree.tag_configure('err',       background='#FFCDD2')
-        self.tree.tag_configure('ignore',    background='#FFE0B2')
+        self.tree.tag_configure('groupe', background='#EAECF8',
+                                foreground=COLORS['secondary'], font=(FONT, 9, 'bold'))
+        self.tree.tag_configure('sel',    background=COLORS['card'])
+        self.tree.tag_configure('desel',  background='#F5F4F8', foreground=COLORS['muted'])
+        self.tree.tag_configure('ok',     background='#DFF2E0')
+        self.tree.tag_configure('err',    background='#FBE2DE')
+        self.tree.tag_configure('ignore', background='#FFF0DC')
 
-        self.tree.bind('<ButtonRelease-1>',       self._on_click)
+        self.tree.bind('<ButtonRelease-1>',        self._on_click)
         self.tree.bind('<Double-ButtonRelease-1>', self._on_dbl_click)
+        self.tree.bind('<Control-a>', lambda e: (self._tout_sel(), 'break')[1])
+        self.tree.bind('<Control-d>', lambda e: (self._tout_desel(), 'break')[1])
+        self.root.bind('<Control-f>', lambda e: self.filtre_entry.focus_set())
 
-        # ── Actions ──
-        act = ttk.Frame(main)
-        act.pack(fill=tk.X, pady=(6, 0))
-        self.btn_supprimer = ttk.Button(act, text="🗑️ Supprimer la sélection",
-                                        command=self.supprimer_doublons,
-                                        style='Primary.TButton')
-        self.btn_supprimer.pack(side=tk.LEFT, padx=4)
-        self.btn_annuler = ttk.Button(act, text="⛔ Annuler",
-                                      command=self.annuler_suppression,
-                                      style='Cancel.TButton', state=tk.DISABLED)
-        self.btn_annuler.pack(side=tk.LEFT, padx=4)
-        self.btn_rapport = ttk.Button(act, text="📄 Voir rapport", command=self.voir_rapport)
-        self.btn_rapport.pack(side=tk.LEFT, padx=4)
-        self.btn_reset   = ttk.Button(act, text="🔄 Réinitialiser", command=self.reinitialiser)
-        self.btn_reset.pack(side=tk.LEFT, padx=4)
-        ttk.Button(act, text="❌ Quitter", command=self.quitter).pack(side=tk.LEFT, padx=4)
+        # ── Barre d'actions : options à gauche, boutons à droite ──
+        act = tk.Frame(body, bg=COLORS['bg'])
+        act.pack(fill=tk.X, pady=(10, 0))
 
-        # Barre de statut
-        self.status_var = tk.StringVar(value="Prêt — Chargez le CSV puis sélectionnez le répertoire source")
-        ttk.Label(main, textvariable=self.status_var, relief=tk.SUNKEN,
-                  style='Subtitle.TLabel', background=COLORS['accent3'],
-                  padding=8).pack(fill=tk.X, pady=(6, 0))
+        self.tg_md5 = ToggleRow(act, self.verifier_md5,
+                                'Vérification MD5',
+                                'contrôle du contenu avant suppression')
+        self.tg_md5.pack(side=tk.LEFT, padx=(0, 18))
+        trash_sub = 'suppression réversible' if SEND2TRASH_AVAILABLE \
+                    else 'module send2trash absent → suppression DÉFINITIVE'
+        self.tg_trash = ToggleRow(act, self.use_trash,
+                                  'Envoyer à la corbeille', trash_sub,
+                                  state='normal' if SEND2TRASH_AVAILABLE else 'disabled')
+        self.tg_trash.pack(side=tk.LEFT)
 
-        # Positionner le sash après rendu
-        self.root.after(150, lambda: paned.sash_place(0, 0, 330))
+        self.btn_supprimer = FlatButton(act, text='🗑  Supprimer la sélection',
+                                        command=self.supprimer_doublons, kind='primary')
+        self.btn_supprimer.pack(side=tk.RIGHT)
+        self.btn_annuler = FlatButton(act, text='⛔ Annuler',
+                                      command=self.annuler_suppression, kind='danger')
+        self.btn_annuler.pack(side=tk.RIGHT, padx=(0, 8))
+        self.btn_annuler.set_enabled(False)
+        self.btn_rapport = FlatButton(act, text='📄 Voir rapport',
+                                      command=self.voir_rapport, kind='ghost')
+        self.btn_rapport.pack(side=tk.RIGHT, padx=(0, 8))
+        self.btn_reset = FlatButton(act, text='🔄 Réinitialiser',
+                                    command=self.reinitialiser, kind='ghost')
+        self.btn_reset.pack(side=tk.RIGHT, padx=(0, 8))
+
+        # ── Barre d'état : statut à gauche, progression à droite ──
+        status = tk.Frame(self.root, bg=COLORS['card'])
+        status.pack(fill=tk.X, side=tk.BOTTOM)
+        tk.Frame(status, bg=COLORS['border'], height=1).pack(fill=tk.X)
+        sin = tk.Frame(status, bg=COLORS['card'])
+        sin.pack(fill=tk.X, padx=14, pady=6)
+
+        self.status_var = tk.StringVar(value=self._STATUS_DEFAUT)
+        tk.Label(sin, text='●', bg=COLORS['card'], fg=COLORS['primary'],
+                 font=(FONT, 9)).pack(side=tk.LEFT)
+        tk.Label(sin, textvariable=self.status_var, bg=COLORS['card'],
+                 fg=COLORS['text'], font=(FONT, 9),
+                 anchor='w').pack(side=tk.LEFT, padx=(6, 0), fill=tk.X, expand=True)
+
+        self.progress_bar = ttk.Progressbar(sin, mode='determinate', length=240)
+        self.progress_bar.pack(side=tk.RIGHT, padx=(10, 0))
+        self.progress_text = tk.Label(sin, text='Prêt', bg=COLORS['card'],
+                                      fg=COLORS['muted'], font=(FONT, 9))
+        self.progress_text.pack(side=tk.RIGHT)
+
+    # ── États des contrôles ───────────────────────────────────────────────────
+
+    def _actualiser_etats(self):
+        libre = not self._busy and not self._running
+        for b in (self.btn_csv, self.btn_rep, self.btn_supprimer,
+                  self.btn_rapport, self.btn_reset):
+            b.set_enabled(libre)
+        self.btn_annuler.set_enabled(self._running)
+        self.tg_md5.set_state('normal' if libre else 'disabled')
+        self.tg_trash.set_state(
+            'normal' if libre and SEND2TRASH_AVAILABLE else 'disabled')
+
+    def _progress_anim(self, actif):
+        """Bascule la barre de progression en mode animation indéterminée."""
+        if actif:
+            self.progress_bar.config(mode='indeterminate')
+            self.progress_bar.start(14)
+        else:
+            self.progress_bar.stop()
+            self.progress_bar.config(mode='determinate')
 
     # ── Chargement ───────────────────────────────────────────────────────────
 
     def _lire_csv(self, chemin):
+        """Retourne (lignes_fichiers, nom_colonne_date). Exécuté hors thread UI."""
         derniere_erreur = None
         for enc in ('utf-8-sig', 'utf-8', 'latin-1', 'cp1252'):
             try:
@@ -499,77 +699,117 @@ class ApplicationDoublons:
                             + "\n  ".join(sorted(manquantes))
                             + "\n\nCe fichier est-il un export Archifiltre (séparateur ';') ?"
                         )
-                    self._date_colonne = next(
+                    date_colonne = next(
                         (c for c in DATE_COLONNES if c in fieldnames), None
                     )
-                    return [
+                    lignes = [
                         ligne for ligne in lecteur
                         if (ligne.get('fichier/répertoire') or '').strip() == 'fichier'
                     ]
+                    return lignes, date_colonne
             except UnicodeDecodeError as e:
                 derniere_erreur = e
                 continue
         raise ValueError(f"Encodage CSV non reconnu : {derniere_erreur}")
 
     def charger_csv(self):
+        if self._busy or self._running:
+            return
         chemin = filedialog.askopenfilename(
             title="Ouvrir fichier CSV Archifiltre",
             filetypes=[("CSV", "*.csv"), ("Tous les fichiers", "*.*")]
         )
         if not chemin:
             return
+        self._busy = True
+        self._actualiser_etats()
+        self.status_var.set("Chargement du CSV…")
+        self.progress_text.config(text="Lecture du CSV…")
+        self._progress_anim(True)
+        threading.Thread(target=self._thread_csv, args=(chemin,), daemon=True).start()
+
+    def _thread_csv(self, chemin):
         try:
-            self.status_var.set("Chargement du CSV…")
-            self.root.update_idletasks()
-            self.donnees  = self._lire_csv(chemin)
-            self.csv_path = chemin
-            date_info = f"  |  date: «{self._date_colonne}»" if self._date_colonne \
-                        else "  |  ⚠️ colonne de date absente (ordre CSV conservé)"
-            self.csv_label.config(
-                text=f"✓ {os.path.basename(chemin)}{date_info}",
-                foreground=COLORS['success']
-            )
-            if self.repertoire_source:
-                self.analyser_doublons()
-            else:
-                self.status_var.set(
-                    f"CSV chargé ({len(self.donnees):,} fichiers) — Sélectionnez le répertoire source"
-                )
+            donnees, date_colonne = self._lire_csv(chemin)
+            self.root.after(0, self._csv_charge, chemin, donnees, date_colonne)
         except Exception as e:
-            messagebox.showerror("Erreur CSV", str(e))
-            self.status_var.set("Erreur chargement CSV")
+            self.root.after(0, self._csv_erreur, str(e))
+
+    def _csv_charge(self, chemin, donnees, date_colonne):
+        self._progress_anim(False)
+        self._busy = False
+        self._actualiser_etats()
+        self.donnees       = donnees
+        self.csv_path      = chemin
+        self._date_colonne = date_colonne
+        date_info = f"   |   date : « {date_colonne} »" if date_colonne \
+                    else "   |   ⚠ colonne de date absente (ordre CSV conservé)"
+        self.csv_label.config(
+            text=f"●  {os.path.basename(chemin)}  —  {len(donnees):,} fichiers{date_info}",
+            foreground=COLORS['success']
+        )
+        self.progress_text.config(text="CSV chargé")
+        if self.repertoire_source:
+            self.analyser_doublons()
+        else:
+            self.status_var.set(
+                f"CSV chargé ({len(donnees):,} fichiers) — sélectionnez le répertoire source"
+            )
+
+    def _csv_erreur(self, message):
+        self._progress_anim(False)
+        self._busy = False
+        self._actualiser_etats()
+        self.progress_text.config(text="Erreur CSV")
+        self.status_var.set("Erreur chargement CSV")
+        messagebox.showerror("Erreur CSV", message)
 
     def charger_repertoire(self):
+        if self._busy or self._running:
+            return
         repertoire = filedialog.askdirectory(
             title="Sélectionner le répertoire source des archives"
         )
         if not repertoire:
             return
-        try:
-            self.status_var.set("Indexation du répertoire…")
-            self.root.update_idletasks()
-            self.repertoire_source = repertoire
+        self._busy = True
+        self._actualiser_etats()
+        self.status_var.set("Indexation du répertoire en cours…")
+        self.progress_text.config(text="Indexation…")
+        self._progress_anim(True)
+        threading.Thread(target=self._thread_indexation,
+                         args=(repertoire,), daemon=True).start()
 
-            def _prog(n):
-                self.progress_text.config(text=f"Indexation : {n:,} fichiers…")
-                self.root.update_idletasks()
+    def _thread_indexation(self, repertoire):
+        def _prog(n):
+            self.root.after(0, lambda n=n: self.progress_text.config(
+                text=f"Indexation : {n:,} fichiers…"))
+        self.file_index.indexer_repertoire(repertoire, progress_callback=_prog)
+        self.root.after(0, self._fin_indexation, repertoire)
 
-            self.file_index.indexer_repertoire(repertoire, progress_callback=_prog)
-            self.progress_text.config(text="Indexation terminée")
-            nom = os.path.basename(os.path.normpath(repertoire))
-            self.rep_label.config(
-                text=f"✓ {nom}  ({self.file_index.total_files:,} fichiers indexés)",
-                foreground=COLORS['success']
+    def _fin_indexation(self, repertoire):
+        self._progress_anim(False)
+        self._busy = False
+        self._actualiser_etats()
+        if not self.file_index.indexed:
+            self.progress_text.config(text="Erreur indexation")
+            self.status_var.set("Erreur lors de l'indexation du répertoire")
+            messagebox.showerror("Erreur répertoire",
+                                 "L'indexation du répertoire a échoué.")
+            return
+        self.repertoire_source = repertoire
+        nom = os.path.basename(os.path.normpath(repertoire))
+        self.rep_label.config(
+            text=f"●  {nom}  —  {self.file_index.total_files:,} fichiers indexés",
+            foreground=COLORS['success']
+        )
+        self.progress_text.config(text="Indexation terminée")
+        if self.donnees:
+            self.analyser_doublons()
+        else:
+            self.status_var.set(
+                f"Répertoire indexé ({self.file_index.total_files:,} fichiers) — chargez le CSV"
             )
-            if self.donnees:
-                self.analyser_doublons()
-            else:
-                self.status_var.set(
-                    f"Répertoire indexé ({self.file_index.total_files:,} fichiers) — Chargez le CSV"
-                )
-        except Exception as e:
-            messagebox.showerror("Erreur répertoire", str(e))
-            self.status_var.set("Erreur chargement répertoire")
 
     # ── Analyse ───────────────────────────────────────────────────────────────
 
@@ -578,7 +818,7 @@ class ApplicationDoublons:
             return
         self.status_var.set("Analyse en cours…")
         self.progress_bar['value'] = 0
-        self.progress_text.config(text="Regroupement par empreinte MD5…")
+        self.progress_text.config(text="Regroupement par MD5…")
         self.root.update_idletasks()
 
         groupes = defaultdict(list)
@@ -604,25 +844,38 @@ class ApplicationDoublons:
                 self.doublons[h] = {'original': tries[0], 'copies': tries[1:]}
 
         self.doublons_stats = DoublonsStats(self.doublons)
+        self._initialiser_selection()
         self.label_fichiers.config(    text=f"{len(self.donnees):,}")
         self.label_groupes.config(     text=f"{self.doublons_stats.total_groupes:,}")
         self.label_a_supprimer.config( text=f"{self.doublons_stats.total_copies:,}")
         self.label_espace.config(      text=self.doublons_stats.get_formatted_size())
         self.progress_bar['value'] = 100
         self.progress_text.config(
-            text=f"✓ {self.doublons_stats.total_groupes:,} groupes, "
+            text=f"{self.doublons_stats.total_groupes:,} groupes, "
                  f"{self.doublons_stats.total_copies:,} copies"
         )
         self.status_var.set(
             f"Analyse terminée — {self.doublons_stats.total_copies:,} fichiers à supprimer "
             f"dans {self.doublons_stats.total_groupes:,} groupes"
         )
+        self._filtre_effacer()
         self._remplir_treeview()
 
-    def _remplir_treeview(self):
+    def _initialiser_selection(self):
+        """Construit l'état de sélection (tout coché) pour les doublons courants."""
+        self._all_keys = [
+            (h, c.get('nom', '?'), c.get('chemin', '?'))
+            for h, groupe in self.doublons.items()
+            for c in groupe['copies']
+        ]
+        self._sel    = {k: True for k in self._all_keys}
+        self._statut = {}
+
+    def _remplir_treeview(self, filtre=''):
         self.tree.delete(*self.tree.get_children())
-        self._items_sel.clear()
-        self._copie_key.clear()
+        self._key_iid.clear()
+        self._iid_key.clear()
+        f = (filtre or '').strip().lower()
 
         if not self.doublons:
             self.tree.insert('', 'end',
@@ -630,48 +883,109 @@ class ApplicationDoublons:
             self._maj_lbl_sel()
             return
 
-        # Au-delà de 200 groupes : replier les groupes par défaut pour la perf
-        collapse = self.doublons_stats.total_groupes > 200
+        # Au-delà de 200 groupes : replier par défaut (flèche pour déplier)
+        ouvert   = bool(f) or self.doublons_stats.total_groupes <= 200
+        visibles = 0
 
         for hash_md5, groupe in self.doublons.items():
             orig = groupe['original']
-            gid  = self.tree.insert('', 'end', values=(
+            if f:
+                textes = [orig.get('nom', ''), orig.get('chemin', '')]
+                for c in groupe['copies']:
+                    textes += [c.get('nom', ''), c.get('chemin', '')]
+                if not any(f in (t or '').lower() for t in textes):
+                    continue
+            visibles += 1
+
+            gid = self.tree.insert('', 'end', values=(
                 '',
-                f"📁 ORIGINAL : {orig.get('nom', '?')}",
+                f"ORIGINAL : {orig.get('nom', '?')}",
                 orig.get('chemin', '?'),
                 format_size(to_int(orig.get('poids', 0))),
                 f"Hash : {hash_md5[:16]}…",
-            ), tags=('groupe',), open=not collapse)
+            ), tags=('groupe',), open=ouvert)
 
             for copie in groupe['copies']:
                 nom    = copie.get('nom', '?')
                 chemin = copie.get('chemin', '?')
+                key    = (hash_md5, nom, chemin)
+                sel    = self._sel.get(key, True)
+                statut, stag = self._statut.get(key, ('En attente', None))
+                tag    = stag or ('sel' if sel else 'desel')
                 iid    = self.tree.insert(gid, 'end', values=(
-                    self._CB_ON,
+                    self._CB_ON if sel else self._CB_OFF,
                     nom,
                     chemin,
                     format_size(to_int(copie.get('poids', 0))),
-                    'En attente',
-                ), tags=('sel',))
-                self._items_sel[iid]  = True
-                self._copie_key[(hash_md5, nom, chemin)] = iid
+                    statut,
+                ), tags=(tag,))
+                self._key_iid[key] = iid
+                self._iid_key[iid] = key
+            self._maj_case_groupe(gid)
 
+        if f and not visibles:
+            self.tree.insert('', 'end',
+                values=('', f"Aucun résultat pour « {filtre.strip()} »", '', '', ''),
+                tags=('groupe',))
         self._maj_lbl_sel()
+
+    # ── Filtre ────────────────────────────────────────────────────────────────
+
+    def _filtre_texte(self):
+        if self._filtre_vide:
+            return ''
+        return self.filtre_entry.get()
+
+    def _filtre_focus_in(self, _=None):
+        if self._filtre_vide:
+            self.filtre_entry.delete(0, tk.END)
+            self.filtre_entry.config(fg=COLORS['text'])
+            self._filtre_vide = False
+
+    def _filtre_focus_out(self, _=None):
+        if not self.filtre_entry.get().strip():
+            self.filtre_entry.delete(0, tk.END)
+            self.filtre_entry.insert(0, self._filtre_placeholder)
+            self.filtre_entry.config(fg=COLORS['muted'])
+            self._filtre_vide = True
+
+    def _filtre_effacer(self, _=None):
+        self.filtre_entry.delete(0, tk.END)
+        self._filtre_vide = False
+        self._filtre_focus_out()
+        self.tree.focus_set()
+        if self.doublons:
+            self._remplir_treeview()
+
+    def _on_filtre(self, _=None):
+        if self._filtre_job:
+            self.root.after_cancel(self._filtre_job)
+        self._filtre_job = self.root.after(250, self._appliquer_filtre)
+
+    def _appliquer_filtre(self):
+        self._filtre_job = None
+        if self.doublons:
+            self._remplir_treeview(self._filtre_texte())
 
     # ── Treeview interactions ────────────────────────────────────────────────
 
     def _on_click(self, event):
         col  = self.tree.identify_column(event.x)
         item = self.tree.identify_row(event.y)
-        if item and col == '#1' and item in self._items_sel:
+        if not item or col != '#1':
+            return
+        if item in self._iid_key:
             self._toggle(item)
+        elif self.tree.get_children(item):
+            # Case du groupe : (dé)coche toutes ses copies
+            self._toggle_groupe(item)
 
     def _on_dbl_click(self, event):
         item = self.tree.identify_row(event.y)
-        if not item:
+        if not item or self.tree.identify_column(event.x) == '#1':
             return
         vals = self.tree.item(item, 'values')
-        if not vals or len(vals) < 3:
+        if not vals or len(vals) < 3 or not vals[2]:
             return
         chemin_csv = vals[2]
         reel = self.file_index.resoudre_chemin_exact(chemin_csv)
@@ -682,37 +996,87 @@ class ApplicationDoublons:
                 "Chemin non résolu",
                 f"Chemin CSV :\n{chemin_csv}\n\n"
                 "Ce fichier n'a pas été trouvé sur le disque.\n"
-                "Utilisez 'Diagnostiquer chemins' pour plus d'informations."
+                "Utilisez 'Diagnostiquer les chemins' pour plus d'informations."
             )
 
-    def _toggle(self, iid):
-        sel = not self._items_sel.get(iid, True)
-        self._items_sel[iid] = sel
+    def _appliquer_sel(self, iid, sel):
+        key = self._iid_key.get(iid)
+        if key is None:
+            return
+        self._sel[key] = sel
         vals    = list(self.tree.item(iid, 'values'))
         vals[0] = self._CB_ON if sel else self._CB_OFF
-        self.tree.item(iid, values=vals, tags=('sel' if sel else 'desel',))
+        statut, stag = self._statut.get(key, (None, None))
+        tag = stag or ('sel' if sel else 'desel')
+        self.tree.item(iid, values=vals, tags=(tag,))
+
+    def _toggle(self, iid):
+        if self._running:
+            return
+        key = self._iid_key.get(iid)
+        if key is None:
+            return
+        self._appliquer_sel(iid, not self._sel.get(key, True))
+        self._maj_case_groupe(self.tree.parent(iid))
         self._maj_lbl_sel()
+
+    def _toggle_groupe(self, gid):
+        if self._running:
+            return
+        enfants = [i for i in self.tree.get_children(gid) if i in self._iid_key]
+        if not enfants:
+            return
+        tous_coches = all(self._sel.get(self._iid_key[i], True) for i in enfants)
+        for i in enfants:
+            self._appliquer_sel(i, not tous_coches)
+        self._maj_case_groupe(gid)
+        self._maj_lbl_sel()
+
+    def _toggle_entete(self):
+        """Clic sur l'en-tête ☑ : (dé)coche toutes les lignes visibles."""
+        if self._running or not self._iid_key:
+            return
+        tous_coches = all(self._sel.get(k, True) for k in self._iid_key.values())
+        if tous_coches:
+            self._tout_desel()
+        else:
+            self._tout_sel()
 
     def _tout_sel(self):
-        for iid in self._items_sel:
-            self._items_sel[iid] = True
-            v    = list(self.tree.item(iid, 'values'))
-            v[0] = self._CB_ON
-            self.tree.item(iid, values=v, tags=('sel',))
-        self._maj_lbl_sel()
+        self._sel_visibles(True)
 
     def _tout_desel(self):
-        for iid in self._items_sel:
-            self._items_sel[iid] = False
-            v    = list(self.tree.item(iid, 'values'))
-            v[0] = self._CB_OFF
-            self.tree.item(iid, values=v, tags=('desel',))
+        self._sel_visibles(False)
+
+    def _sel_visibles(self, sel):
+        if self._running:
+            return
+        parents = set()
+        for iid in self._iid_key:
+            self._appliquer_sel(iid, sel)
+            parents.add(self.tree.parent(iid))
+        for gid in parents:
+            self._maj_case_groupe(gid)
         self._maj_lbl_sel()
 
+    def _maj_case_groupe(self, gid):
+        """Affiche sur la ligne de groupe l'état agrégé de ses copies."""
+        if not gid:
+            return
+        etats = [self._sel.get(self._iid_key[i], True)
+                 for i in self.tree.get_children(gid) if i in self._iid_key]
+        if not etats:
+            return
+        car = self._CB_ON if all(etats) else (self._CB_OFF if not any(etats)
+                                              else self._CB_PARTIEL)
+        vals = list(self.tree.item(gid, 'values'))
+        vals[0] = car
+        self.tree.item(gid, values=vals)
+
     def _maj_lbl_sel(self):
-        n   = sum(1 for v in self._items_sel.values() if v)
-        tot = len(self._items_sel)
-        self.lbl_sel.config(text=f"{n}/{tot} sélectionnés")
+        tot = len(self._all_keys)
+        n   = sum(1 for k in self._all_keys if self._sel.get(k, True))
+        self.lbl_sel.config(text=f"{n:,} cochés sur {tot:,}" if tot else '')
 
     # ── Diagnostic ───────────────────────────────────────────────────────────
 
@@ -728,19 +1092,22 @@ class ApplicationDoublons:
         win.title("Diagnostic de correspondance des chemins")
         win.geometry("950x620")
         win.geometry(f"+{self.root.winfo_x()+50}+{self.root.winfo_y()+50}")
+        win.configure(bg=COLORS['bg'])
 
-        fr = ttk.Frame(win, padding=10)
-        fr.pack(fill=tk.BOTH, expand=True)
-        ttk.Label(fr,
-            text="Vérification chemin CSV ↔ fichier sur disque (double-cliquez pour ouvrir dans l'explorateur)",
-            font=('Segoe UI', 10, 'bold')).pack(anchor=tk.W, pady=(0, 6))
+        fr = tk.Frame(win, bg=COLORS['bg'])
+        fr.pack(fill=tk.BOTH, expand=True, padx=12, pady=10)
+        tk.Label(fr, text="Vérification chemin CSV ↔ fichier sur disque",
+                 bg=COLORS['bg'], fg=COLORS['secondary'],
+                 font=(FONT, 11, 'bold')).pack(anchor=tk.W, pady=(0, 6))
 
         vsb = ttk.Scrollbar(fr)
         vsb.pack(side=tk.RIGHT, fill=tk.Y)
         hsb = ttk.Scrollbar(fr, orient=tk.HORIZONTAL)
         hsb.pack(side=tk.BOTTOM, fill=tk.X)
         txt = tk.Text(fr, wrap=tk.NONE, yscrollcommand=vsb.set, xscrollcommand=hsb.set,
-                      font=('Consolas', 8), bg='white', fg=COLORS['text'])
+                      font=('Consolas', 8), bg=COLORS['card'], fg=COLORS['text'],
+                      relief='flat', highlightthickness=1,
+                      highlightbackground=COLORS['border'])
         txt.pack(fill=tk.BOTH, expand=True)
         vsb.config(command=txt.yview)
         hsb.config(command=txt.xview)
@@ -788,9 +1155,9 @@ class ApplicationDoublons:
                                    "Aucun fichier coché pour suppression.")
             return
 
-        n        = len(copies)
+        n         = len(copies)
         corbeille = self.use_trash.get() and SEND2TRASH_AVAILABLE
-        mode     = "CORBEILLE (réversible)" if corbeille else "suppression DÉFINITIVE ⚠️"
+        mode      = "CORBEILLE (réversible)" if corbeille else "suppression DÉFINITIVE ⚠️"
 
         ok = messagebox.askyesno(
             "⚠️  CONFIRMATION",
@@ -821,15 +1188,15 @@ class ApplicationDoublons:
             for copie in groupe['copies']:
                 nom    = copie.get('nom', '?')
                 chemin = copie.get('chemin', '?')
-                iid    = self._copie_key.get((hash_md5, nom, chemin))
-                if iid and self._items_sel.get(iid, True):
+                key    = (hash_md5, nom, chemin)
+                if self._sel.get(key, True):
                     result.append({
-                        'hash':     hash_md5,
-                        'nom':      nom,
-                        'chemin':   chemin,
-                        'poids':    to_int(copie.get('poids', 0)),
+                        'hash':      hash_md5,
+                        'nom':       nom,
+                        'chemin':    chemin,
+                        'poids':     to_int(copie.get('poids', 0)),
                         'originaux': originaux,
-                        'iid':      iid,
+                        'key':       key,
                     })
         return result
 
@@ -837,14 +1204,11 @@ class ApplicationDoublons:
         if self.suppression_thread and self.suppression_thread.is_alive():
             self.cancellation_requested = True
             self.status_var.set("Annulation demandée… arrêt après le fichier en cours")
-            self.btn_annuler.config(state=tk.DISABLED)
+            self.btn_annuler.set_enabled(False)
 
     def _set_actions(self, running):
-        etat = tk.DISABLED if running else tk.NORMAL
-        self.btn_supprimer.config(state=etat)
-        self.btn_rapport.config(  state=etat)
-        self.btn_reset.config(    state=etat)
-        self.btn_annuler.config(  state=tk.NORMAL if running else tk.DISABLED)
+        self._running = running
+        self._actualiser_etats()
 
     def _resoudre_originaux(self, original):
         exact = self.file_index.resoudre_chemin_exact(original.get('chemin', ''))
@@ -864,7 +1228,7 @@ class ApplicationDoublons:
                 chemin_csv = copie['chemin']
                 hash_md5   = copie['hash']
                 originaux  = copie['originaux']
-                iid        = copie['iid']
+                key        = copie['key']
 
                 cible, raison = self._selectionner_cible(
                     nom, chemin_csv, hash_md5, originaux, verifier_md5
@@ -877,17 +1241,17 @@ class ApplicationDoublons:
                         else:
                             os.remove(cible)
                         supprimes.append({'nom': nom, 'chemin': cible, 'poids': copie['poids']})
-                        self.root.after(0, self._set_iid_statut, iid, '✓ Supprimé', 'ok')
+                        self.root.after(0, self._set_statut, key, '✓ Supprimé', 'ok')
                     except PermissionError as e:
                         msg = f"Accès refusé (fichier verrouillé ?) : {e}"
                         erreurs.append({'nom': nom, 'chemin': cible, 'erreur': msg})
-                        self.root.after(0, self._set_iid_statut, iid, '⚠ Accès refusé', 'err')
+                        self.root.after(0, self._set_statut, key, '⚠ Accès refusé', 'err')
                     except Exception as e:
                         erreurs.append({'nom': nom, 'chemin': cible, 'erreur': str(e)[:200]})
-                        self.root.after(0, self._set_iid_statut, iid, '✗ Erreur', 'err')
+                        self.root.after(0, self._set_statut, key, '✗ Erreur', 'err')
                 else:
                     erreurs.append({'nom': nom, 'chemin_csv': chemin_csv, 'erreur': raison})
-                    self.root.after(0, self._set_iid_statut, iid, '— Ignoré', 'ignore')
+                    self.root.after(0, self._set_statut, key, '— Ignoré', 'ignore')
 
                 pct = int(((i + 1) / total) * 100) if total else 100
                 self.root.after(0, self._update_progress, pct, i + 1, total, nom)
@@ -937,11 +1301,16 @@ class ApplicationDoublons:
 
     def _update_progress(self, pct, cur, total, nom):
         self.progress_bar['value'] = pct
-        fn = nom[:65] + ('…' if len(nom) > 65 else '')
-        self.progress_text.config(text=f"Suppression : {cur:,}/{total:,} — {fn}")
+        fn = nom[:40] + ('…' if len(nom) > 40 else '')
+        self.progress_text.config(text=f"{cur:,}/{total:,} — {fn}")
         self.status_var.set(f"Suppression en cours : {cur:,}/{total:,}")
 
-    def _set_iid_statut(self, iid, texte, tag):
+    def _set_statut(self, key, texte, tag):
+        """Enregistre le statut d'une copie et met à jour la ligne si visible."""
+        self._statut[key] = (texte, tag)
+        iid = self._key_iid.get(key)
+        if not iid:
+            return
         try:
             v    = list(self.tree.item(iid, 'values'))
             v[4] = texte
@@ -964,10 +1333,10 @@ class ApplicationDoublons:
         messagebox.showinfo("Résultat" + (" (annulé)" if annule else ""), msg)
         self.progress_bar['value'] = 100
         self.progress_text.config(
-            text=f"✓ Terminé — {len(supprimes):,} supprimés, {len(erreurs):,} erreurs"
+            text=f"{len(supprimes):,} supprimés, {len(erreurs):,} erreurs"
         )
         self.status_var.set(
-            f"✓ Terminé — {len(supprimes):,} supprimés, {len(erreurs):,} erreurs/ignorés"
+            f"Terminé — {len(supprimes):,} supprimés, {len(erreurs):,} erreurs/ignorés"
         )
         self._set_actions(running=False)
 
@@ -981,7 +1350,7 @@ class ApplicationDoublons:
 
         with open(rapport, 'w', encoding='utf-8') as f:
             f.write("╔════════════════════════════════════════════════════════════════╗\n")
-            f.write("║    RAPPORT DE SUPPRESSION DES DOUBLONS ARCHIFILTRE v5.0        ║\n")
+            f.write("║    RAPPORT DE SUPPRESSION DES DOUBLONS ARCHIFILTRE v5.1        ║\n")
             f.write("╚════════════════════════════════════════════════════════════════╝\n\n")
             f.write(f"Date       : {datetime.now().strftime('%d/%m/%Y %H:%M:%S')}\n")
             f.write(f"CSV        : {Path(self.csv_path).name if self.csv_path else 'N/A'}\n")
@@ -1037,40 +1406,51 @@ class ApplicationDoublons:
         win.title(f"Rapport : {chemin.name}")
         win.geometry("1000x720")
         win.geometry(f"+{self.root.winfo_x()+50}+{self.root.winfo_y()+50}")
+        win.configure(bg=COLORS['bg'])
 
-        fr = ttk.Frame(win, padding=8)
-        fr.pack(fill=tk.BOTH, expand=True)
-        ttk.Label(fr, text=str(chemin), font=('Segoe UI', 8),
-                  foreground=COLORS['accent1']).pack(anchor=tk.W, pady=(0, 4))
+        fr = tk.Frame(win, bg=COLORS['bg'])
+        fr.pack(fill=tk.BOTH, expand=True, padx=12, pady=10)
+        tk.Label(fr, text=str(chemin), bg=COLORS['bg'], font=(FONT, 8),
+                 fg=COLORS['muted']).pack(anchor=tk.W, pady=(0, 4))
+
+        btns = tk.Frame(fr, bg=COLORS['bg'])
+        btns.pack(fill=tk.X, side=tk.BOTTOM, pady=(6, 0))
+        FlatButton(btns, text='📂 Ouvrir le dossier des rapports',
+                   command=lambda: ouvrir_explorateur(str(dossier)),
+                   kind='ghost', small=True).pack(side=tk.LEFT)
 
         vsb = ttk.Scrollbar(fr)
         vsb.pack(side=tk.RIGHT, fill=tk.Y)
         hsb = ttk.Scrollbar(fr, orient=tk.HORIZONTAL)
         hsb.pack(side=tk.BOTTOM, fill=tk.X)
         txt = tk.Text(fr, wrap=tk.NONE, yscrollcommand=vsb.set, xscrollcommand=hsb.set,
-                      font=('Consolas', 9), bg='white', fg=COLORS['text'])
+                      font=('Consolas', 9), bg=COLORS['card'], fg=COLORS['text'],
+                      relief='flat', highlightthickness=1,
+                      highlightbackground=COLORS['border'])
         txt.pack(fill=tk.BOTH, expand=True)
         vsb.config(command=txt.yview)
         hsb.config(command=txt.xview)
         txt.insert('1.0', contenu)
         txt.config(state=tk.DISABLED)
 
-        ttk.Button(fr, text="📂 Ouvrir le dossier des rapports",
-                   command=lambda: ouvrir_explorateur(str(dossier))
-                   ).pack(anchor=tk.W, pady=(6, 0))
-
     def _choisir_rapport(self, fichiers):
         win = tk.Toplevel(self.root)
         win.title("Choisir un rapport")
-        win.geometry("500x320")
+        win.geometry("500x340")
         win.geometry(f"+{self.root.winfo_x()+80}+{self.root.winfo_y()+80}")
+        win.configure(bg=COLORS['bg'])
         win.grab_set()
         choix = [None]
 
-        ttk.Label(win, text="Sélectionnez le rapport à ouvrir :",
-                  font=('Segoe UI', 10, 'bold')).pack(padx=10, pady=(10, 4))
-        lb = tk.Listbox(win, font=('Consolas', 9), height=12)
-        lb.pack(fill=tk.BOTH, expand=True, padx=10, pady=4)
+        tk.Label(win, text="Sélectionnez le rapport à ouvrir :", bg=COLORS['bg'],
+                 fg=COLORS['secondary'],
+                 font=(FONT, 10, 'bold')).pack(padx=12, pady=(12, 4))
+        lb = tk.Listbox(win, font=('Consolas', 9), height=12, relief='flat',
+                        bg=COLORS['card'], highlightthickness=1,
+                        highlightbackground=COLORS['border'],
+                        selectbackground=COLORS['accent2'],
+                        selectforeground=COLORS['text'])
+        lb.pack(fill=tk.BOTH, expand=True, padx=12, pady=4)
         for f in fichiers:
             lb.insert(tk.END, f.name)
         lb.selection_set(0)
@@ -1081,7 +1461,8 @@ class ApplicationDoublons:
                 choix[0] = fichiers[sel[0]]
             win.destroy()
 
-        ttk.Button(win, text="Ouvrir", command=valider, style='Primary.TButton').pack(pady=8)
+        lb.bind('<Double-Button-1>', lambda e: valider())
+        FlatButton(win, text='Ouvrir', command=valider, kind='primary').pack(pady=10)
         win.wait_window()
         return choix[0]
 
@@ -1100,11 +1481,14 @@ class ApplicationDoublons:
         self.doublons_stats = None
         self._date_colonne  = None
         self.file_index     = FileIndex()
-        self._items_sel.clear()
-        self._copie_key.clear()
+        self._all_keys = []
+        self._sel      = {}
+        self._statut   = {}
+        self._key_iid.clear()
+        self._iid_key.clear()
 
-        self.csv_label.config(text="❌ Aucun fichier",    foreground=COLORS['error'])
-        self.rep_label.config(text="❌ Aucun répertoire", foreground=COLORS['error'])
+        self.csv_label.config(text='●  Aucun fichier chargé',    foreground=COLORS['muted'])
+        self.rep_label.config(text='●  Aucun répertoire chargé', foreground=COLORS['muted'])
         for attr, val in [('label_fichiers', '0'), ('label_groupes', '0'),
                           ('label_a_supprimer', '0'), ('label_espace', '0 o')]:
             getattr(self, attr).config(text=val)
@@ -1112,7 +1496,8 @@ class ApplicationDoublons:
         self.progress_text.config(text="Prêt")
         self.tree.delete(*self.tree.get_children())
         self.lbl_sel.config(text="")
-        self.status_var.set("Prêt — Chargez le CSV puis sélectionnez le répertoire source")
+        self._filtre_effacer()
+        self.status_var.set(self._STATUS_DEFAUT)
 
     def quitter(self):
         if self.suppression_thread and self.suppression_thread.is_alive():
